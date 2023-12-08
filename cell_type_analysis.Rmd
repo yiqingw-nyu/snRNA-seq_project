@@ -80,7 +80,8 @@ DimPlot(seurat.obj, group.by = "predicted.subclass", reduction = "tsne",
 
 ```{r}
 DimPlot(seurat.obj, group.by = "predicted.subclass",
-        label = TRUE, label.size = 3)
+        label = TRUE, label.size = 3) + 
+  labs(title = 'Predicted cell types')
 ```
 
 ```{r}
@@ -174,7 +175,7 @@ ggplot(scores_df, aes(x=predicted.subclass.score)) +
   labs(title = "Distribution of cell type prediction scores",
        y = "Frequency") +
   geom_histogram(binwidth=0.05, color="black", fill="skyblue") +
-  geom_vline(xintercept=pred_score_threshold, color="gray", linetype="dashed") +
+  geom_vline(xintercept=pred_score_threshold, color="red", linetype="dashed") +
     annotate("text", x=pred_score_threshold + 0.025, y = 15000, 
              label=pred_score_threshold, size=3)
 ```
@@ -186,7 +187,7 @@ ggplot(mapping_scores_df, aes(x=mapping.score)) +
   labs(title = "Distribution of cell type mapping scores",
        y = "Frequency") +
   geom_histogram(binwidth=0.05, color="black", fill="skyblue") +
-  geom_vline(xintercept=mapping_score_threshold, color="gray", linetype="dashed") +
+  geom_vline(xintercept=mapping_score_threshold, color="red", linetype="dashed") +
     annotate("text", x=mapping_score_threshold + 0.025, y = 15000,
              label=mapping_score_threshold, size=3)
 ```
@@ -202,54 +203,9 @@ total_cells <- ncol(seurat.obj)
 print(glue("{good_cell_types} cells had a high-quality cell type prediction out of {total_cells} total"))
 ```
 
-
-
-
-
-
-
-
-
-
-
-
-
-Try example shown here:
-
 ```{r}
-# # Install the PBMC systematic comparative analyis (pmbcsca) dataset
-# InstallData("pbmcsca")
-# 
-# # returns a Seurat object named pbmcsca
-# pbmcsca <- LoadData("pbmcsca")
+good_cell_types_obj <- subset(seurat.obj, subset = good_cell_type == TRUE)
+# Double-check that worked as intended - should match count above
+ncol(good_cell_types_obj)
 ```
-
-```{r}
-# pbmcsca <- RunAzimuth(pbmcsca, reference = "pbmcref")
-```
-
-```{r}
-# pbmcsca
-```
-
-```{r}
-# pbmcsca$predicted.celltype.l2.score
-```
-
-
-```{r}
- # DimPlot(
- #   pbmcsca, group.by = "predicted.celltype.l2", label = TRUE, label.size = 3)
-```
-
-
-
-
-
-
-
-
-
-
-
 
