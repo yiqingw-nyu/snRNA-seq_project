@@ -1,0 +1,255 @@
+---
+title: "Cell type analysis"
+author: "jstimes"
+date: "2023-12-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This analysis uses Seurat5 and some related packages. Run the following if not 
+already installed:
+
+```{r}
+# install.packages('Seurat')
+# remotes::install_github("satijalab/seurat-data", quiet = TRUE)
+# remotes::install_github("satijalab/azimuth", quiet = TRUE)
+# remotes::install_github("satijalab/seurat-wrappers", quiet = TRUE)
+```
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(Azimuth)
+  library(SeuratData)
+  library(ggsci)
+  library(presto)
+  library(patchwork)
+  library(Matrix)
+  library(glue)
+})
+```
+
+```{r}
+# NOTE: update with your personal path
+project.path <- '/Users/jacob/Documents/nyu/quant_methods/final_project/'
+```
+
+
+```{r}
+seurat.obj <- readRDS(glue("{project.path}processed_data.rds"))
+seurat.obj
+```
+
+```{r}
+seurat.obj <- FindNeighbors(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+seurat.obj <- FindClusters(seurat.obj, resolution = 1)
+seurat.obj <- RunUMAP(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+seurat.obj <- RunTSNE(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+```
+
+```{r}
+DimPlot(seurat.obj, reduction = "tsne", 
+        group.by = c("orig.ident"))
+```
+
+```{r}
+DimPlot(seurat.obj, group.by = c("DISEASE"))
+```
+
+Azimuth R tutorial here:
+https://satijalab.github.io/azimuth/articles/run_azimuth_tutorial.html
+
+```{r}
+seurat.obj <- RunAzimuth(seurat.obj, reference = "humancortexref")
+seurat.obj <- NormalizeData(seurat.obj)
+```
+
+```{r}
+seurat.obj
+```
+
+```{r}
+DimPlot(seurat.obj, group.by = "predicted.subclass", reduction = "tsne", 
+        label = TRUE, label.size = 3)
+```
+
+```{r}
+DimPlot(seurat.obj, group.by = "predicted.subclass",
+        label = TRUE, label.size = 3)
+```
+
+```{r}
+# Some functions to plot cell type prediction scores and expression levels of
+# marker genes.
+
+Idents(seurat.obj) <- "predicted.subclass"
+
+has_gene <- function(gene) {
+  vfs <- VariableFeatures(seurat.obj)
+  return(length(vfs[grepl(gene, vfs)]) == 1)
+}
+
+plot_gene_markers_and_cell_pred_score <- function(gene_markers, cell_label, cell_name) {
+  num_genes = length(gene_markers)
+  prediction_score_plot <- FeaturePlot(
+    seurat.obj, features = glue("predictionscoresubclass_{cell_label}"))
+  prediction_score_plot <- 
+    prediction_score_plot + labs(title=glue("{cell_name} prediction score"))
+  # Use patchwork to combine all plots
+  # https://patchwork.data-imaginist.com/articles/guides/assembly.html#adding-plots-to-the-patchwork
+  all_plots_patch <- prediction_score_plot
+  for (gene in gene_markers) {
+    if (!has_gene(gene)) {
+      print(glue("No expression for marker gene {gene}"))
+      next
+    }
+    all_plots_patch <- all_plots_patch + 
+      (FeaturePlot(seurat.obj, features = gene) + NoLegend())
+  }
+  
+  # Use one gene expression legend on the last plot
+  # Looks cluttered if all plots have it
+  n <- length(all_plots_patch)
+  all_plots_patch[[n]] <- all_plots_patch[[n]] + RestoreLegend()
+  
+  # Apply same theme to all plots
+  all_plots_patch <- all_plots_patch +
+    plot_layout(ncol = 3) &
+    theme(title = element_text(size=8),
+          legend.text = element_text(size=8),
+          legend.title = element_text(size=4),
+          axis.line = element_line(linewidth=0.25),
+          axis.title = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank())
+  
+  all_plots_patch <- all_plots_patch + plot_annotation(
+    title = glue('{cell_name} prediction score & expression of gene markers'),
+    subtitle = 'Gene markers from Azimuth Human Motor Cortex cell type reference',
+    caption = 'Normalized expression levels from 0-5')
+  all_plots_patch
+}
+```
+
+```{r}
+# Gene markers from Azimuth
+# https://azimuth.hubmapconsortium.org/references/#Human%20-%20Motor%20Cortex
+astrocyte_gene_markers <- c(
+  "SLC1A2", "ADGRV1", "SLC1A3", "GPC5", "RNF219.AS1", "ARHGAP24", "CST3", 
+  "HPSE2", "AQP4", "COL5A3")
+plot_gene_markers_and_cell_pred_score(
+  astrocyte_gene_markers, "Astro", "Astrocyte")
+```
+
+```{r}
+oligodendrocyte_gene_markers <- c(
+  "PLP1", "ST18", "CTNNA3", "MBP", "MOBP", "RNF220", "NCKAP5", "ENPP2", "QKI", 
+  "SLC44A1")
+plot_gene_markers_and_cell_pred_score(
+  oligodendrocyte_gene_markers, "Oligo", "Oligodendrocyte")
+```
+
+```{r}
+# OPC = Oligodendrocyte Precursor Cell
+opc_gene_markers  <- c(
+  "VCAN", "PDGFRA", "OLIG1", "SMOC1", "COL9A1", "STK32A", "BCAS1", "FERMT1", 
+  "BCHE", "ZCCHC24")
+plot_gene_markers_and_cell_pred_score(
+  opc_gene_markers, "OPC", "OPC")
+```
+
+Mark cells with good cell type prediction scores.
+
+First, explore distributions of the scores:
+
+```{r}
+pred_score_threshold <- 0.9
+scores_df <- seurat.obj[['predicted.subclass.score']]
+ggplot(scores_df, aes(x=predicted.subclass.score)) +
+  labs(title = "Distribution of cell type prediction scores",
+       y = "Frequency") +
+  geom_histogram(binwidth=0.05, color="black", fill="skyblue") +
+  geom_vline(xintercept=pred_score_threshold, color="gray", linetype="dashed") +
+    annotate("text", x=pred_score_threshold + 0.025, y = 15000, 
+             label=pred_score_threshold, size=3)
+```
+
+```{r}
+mapping_score_threshold <- 0.45
+mapping_scores_df <- seurat.obj[['mapping.score']]
+ggplot(mapping_scores_df, aes(x=mapping.score)) +
+  labs(title = "Distribution of cell type mapping scores",
+       y = "Frequency") +
+  geom_histogram(binwidth=0.05, color="black", fill="skyblue") +
+  geom_vline(xintercept=mapping_score_threshold, color="gray", linetype="dashed") +
+    annotate("text", x=mapping_score_threshold + 0.025, y = 15000,
+             label=mapping_score_threshold, size=3)
+```
+Apply the thresholding:
+
+```{r}
+seurat.obj[['good_cell_type']] <- 
+  seurat.obj[['mapping.score']] > mapping_score_threshold & 
+  seurat.obj[['predicted.subclass.score']] > pred_score_threshold
+
+good_cell_types <- sum(seurat.obj[['good_cell_type']])
+total_cells <- ncol(seurat.obj)
+print(glue("{good_cell_types} cells had a high-quality cell type prediction out of {total_cells} total"))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+Try example shown here:
+
+```{r}
+# # Install the PBMC systematic comparative analyis (pmbcsca) dataset
+# InstallData("pbmcsca")
+# 
+# # returns a Seurat object named pbmcsca
+# pbmcsca <- LoadData("pbmcsca")
+```
+
+```{r}
+# pbmcsca <- RunAzimuth(pbmcsca, reference = "pbmcref")
+```
+
+```{r}
+# pbmcsca
+```
+
+```{r}
+# pbmcsca$predicted.celltype.l2.score
+```
+
+
+```{r}
+ # DimPlot(
+ #   pbmcsca, group.by = "predicted.celltype.l2", label = TRUE, label.size = 3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
