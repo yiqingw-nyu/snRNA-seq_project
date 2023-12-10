@@ -36,50 +36,50 @@ suppressPackageStartupMessages({
 
 ```{r}
 # NOTE: update with your personal path
-project.path <- '/Users/jacob/Documents/nyu/quant_methods/final_project/'
+project_path <- '/Users/jacob/Documents/nyu/quant_methods/final_project/'
 ```
 
 
 ```{r}
-seurat.obj <- readRDS(glue("{project.path}processed_data.rds"))
-seurat.obj
+preprocessed_obj <- readRDS(glue("{project_path}processed_data.rds"))
+preprocessed_obj
 ```
 
 ```{r}
-seurat.obj <- FindNeighbors(seurat.obj, reduction = "integrated.cca", dims = 1:30)
-seurat.obj <- FindClusters(seurat.obj, resolution = 1)
-seurat.obj <- RunUMAP(seurat.obj, reduction = "integrated.cca", dims = 1:30)
-seurat.obj <- RunTSNE(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+preprocessed_obj <- FindNeighbors(preprocessed_obj, reduction = "integrated.cca", dims = 1:30)
+preprocessed_obj <- FindClusters(preprocessed_obj, resolution = 1)
+preprocessed_obj <- RunUMAP(preprocessed_obj, reduction = "integrated.cca", dims = 1:30)
+preprocessed_obj <- RunTSNE(preprocessed_obj, reduction = "integrated.cca", dims = 1:30)
 ```
 
 ```{r}
-DimPlot(seurat.obj, reduction = "tsne", 
+DimPlot(preprocessed_obj, reduction = "tsne", 
         group.by = c("orig.ident"))
 ```
 
 ```{r}
-DimPlot(seurat.obj, group.by = c("DISEASE"))
+DimPlot(preprocessed_obj, group.by = c("DISEASE"))
 ```
 
 Azimuth R tutorial here:
 https://satijalab.github.io/azimuth/articles/run_azimuth_tutorial.html
 
 ```{r}
-seurat.obj <- RunAzimuth(seurat.obj, reference = "humancortexref")
-seurat.obj <- NormalizeData(seurat.obj)
+preprocessed_obj <- RunAzimuth(preprocessed_obj, reference = "humancortexref")
+preprocessed_obj <- NormalizeData(preprocessed_obj)
 ```
 
 ```{r}
-seurat.obj
+preprocessed_obj
 ```
 
 ```{r}
-DimPlot(seurat.obj, group.by = "predicted.subclass", reduction = "tsne", 
+DimPlot(preprocessed_obj, group.by = "predicted.subclass", reduction = "tsne", 
         label = TRUE, label.size = 3)
 ```
 
 ```{r}
-DimPlot(seurat.obj, group.by = "predicted.subclass",
+DimPlot(preprocessed_obj, group.by = "predicted.subclass",
         label = TRUE, label.size = 3) + 
   labs(title = 'Predicted cell types')
 ```
@@ -88,17 +88,17 @@ DimPlot(seurat.obj, group.by = "predicted.subclass",
 # Some functions to plot cell type prediction scores and expression levels of
 # marker genes.
 
-Idents(seurat.obj) <- "predicted.subclass"
+Idents(preprocessed_obj) <- "predicted.subclass"
 
 has_gene <- function(gene) {
-  vfs <- VariableFeatures(seurat.obj)
+  vfs <- VariableFeatures(preprocessed_obj)
   return(length(vfs[grepl(gene, vfs)]) == 1)
 }
 
 plot_gene_markers_and_cell_pred_score <- function(gene_markers, cell_label, cell_name) {
   num_genes = length(gene_markers)
   prediction_score_plot <- FeaturePlot(
-    seurat.obj, features = glue("predictionscoresubclass_{cell_label}"))
+    preprocessed_obj, features = glue("predictionscoresubclass_{cell_label}"))
   prediction_score_plot <- 
     prediction_score_plot + labs(title=glue("{cell_name} prediction score"))
   # Use patchwork to combine all plots
@@ -110,7 +110,7 @@ plot_gene_markers_and_cell_pred_score <- function(gene_markers, cell_label, cell
       next
     }
     all_plots_patch <- all_plots_patch + 
-      (FeaturePlot(seurat.obj, features = gene) + NoLegend())
+      (FeaturePlot(preprocessed_obj, features = gene) + NoLegend())
   }
   
   # Use one gene expression legend on the last plot
@@ -170,7 +170,7 @@ First, explore distributions of the scores:
 
 ```{r}
 pred_score_threshold <- 0.9
-scores_df <- seurat.obj[['predicted.subclass.score']]
+scores_df <- preprocessed_obj[['predicted.subclass.score']]
 ggplot(scores_df, aes(x=predicted.subclass.score)) +
   labs(title = "Distribution of cell type prediction scores",
        y = "Frequency") +
@@ -182,7 +182,7 @@ ggplot(scores_df, aes(x=predicted.subclass.score)) +
 
 ```{r}
 mapping_score_threshold <- 0.45
-mapping_scores_df <- seurat.obj[['mapping.score']]
+mapping_scores_df <- preprocessed_obj[['mapping.score']]
 ggplot(mapping_scores_df, aes(x=mapping.score)) +
   labs(title = "Distribution of cell type mapping scores",
        y = "Frequency") +
@@ -194,18 +194,195 @@ ggplot(mapping_scores_df, aes(x=mapping.score)) +
 Apply the thresholding:
 
 ```{r}
-seurat.obj[['good_cell_type']] <- 
-  seurat.obj[['mapping.score']] > mapping_score_threshold & 
-  seurat.obj[['predicted.subclass.score']] > pred_score_threshold
+preprocessed_obj[['bad_cell_type']] <- 
+  preprocessed_obj[['mapping.score']] < mapping_score_threshold | 
+  preprocessed_obj[['predicted.subclass.score']] < pred_score_threshold
 
-good_cell_types <- sum(seurat.obj[['good_cell_type']])
-total_cells <- ncol(seurat.obj)
+
+total_cells <- ncol(preprocessed_obj)
+good_cell_types <- total_cells - sum(preprocessed_obj[['bad_cell_type']])
 print(glue("{good_cell_types} cells had a high-quality cell type prediction out of {total_cells} total"))
 ```
 
 ```{r}
-good_cell_types_obj <- subset(seurat.obj, subset = good_cell_type == TRUE)
+FeaturePlot(preprocessed_obj, features = "bad_cell_type") + 
+  labs(title = 'Filtered cells due to low annotation scores')
+```
+
+```{r}
+azimuth_obj <- subset(preprocessed_obj, subset = bad_cell_type == FALSE)
 # Double-check that worked as intended - should match count above
 ncol(good_cell_types_obj)
 ```
+
+## Compare with dataset's cell type annotations
+
+From here forward, we'll just use the subset'ed & annotated seurat object with
+the good cell type predictions.
+
+```{r}
+study_annotations <- read.csv(glue("{project_path}sadick_2022_LEN_metadata_matrix.csv"))
+head(study_annotations)
+```
+
+```{r}
+ggplot(study_annotations, aes(
+  # Sort by count:
+  x = reorder(cell_type_label, -table(cell_type_label)[cell_type_label]))) +
+  geom_bar(color="black", fill="skyblue") +
+  geom_text(stat='count', aes(label=after_stat(count)), vjust=-0.5) +
+  labs(title = "Distribution of cell type labels",
+       x = "Cell type label",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+table(study_annotations$astrocyte_subtype)
+```
+
+```{r}
+table(study_annotations$oligodendrocyte_subtype)
+```
+
+```{r}
+rownames(study_annotations) <- study_annotations$X
+```
+
+```{r}
+# Grab just the info worth adding to seurat object and drop extra metadata
+# for samples we're excluding:
+
+before <- nrow(study_annotations)
+
+cell_ids_to_keep <- colnames(azimuth_obj)
+
+extra_metadata <- study_annotations %>%
+  # match the format used in the seurat object
+  mutate(meta_cell_id = paste0(sample, "_", barcode)) %>%
+  filter(meta_cell_id %in% cell_ids_to_keep) %>%
+  select(meta_cell_id, cell_type_label, astrocyte_subtype, oligodendrocyte_subtype)
+rownames(extra_metadata) <- extra_metadata$meta_cell_id
+after <- nrow(extra_metadata)
+print(glue("Filtered {before} rows to {after}"))
+```
+
+Redo plot from above for distribution of cell types in the filtered metadata:
+```{r}
+ggplot(extra_metadata, aes(
+  # Sort by count:
+  x = reorder(cell_type_label, -table(cell_type_label)[cell_type_label]))) +
+  geom_bar(color="black", fill="skyblue") +
+  geom_text(stat='count', aes(label=after_stat(count)), vjust=-0.5) +
+  labs(title = "Distribution of cell type labels",
+       x = "Cell type label",
+       y = "Count") +
+  theme_minimal()
+```
+
+
+```{r}
+# Not all the cells in our seurat object had metadata for some reason...
+# Filter to the ones that had metadata as `AddMetadata` requires same sizes.
+# First add cell IDs as a feature for easier subset'ing.
+azimuth_obj[['cell_id']] <- colnames(azimuth_obj)
+present_ids <- extra_metadata$meta_cell_id
+present_in_metadata <- subset(
+  azimuth_obj, subset = cell_id %in% present_ids)
+annotated_obj <- AddMetaData(present_in_metadata, extra_metadata)
+```
+
+Spot-check a couple rows to make sure these annotations were added properly
+
+```{r}
+tail(extra_metadata)
+```
+
+D12_AAACGCTAGCGTCAAG-1 should be (Astro_B, 6, NULL)
+D8_CGTAAGTCACTCCGGA-1 should be  (Neuro_B, NULL, NULL)
+
+```{r}
+new_cols <- c('cell_type_label', 'astrocyte_subtype', 'oligodendrocyte_subtype')
+subset(annotated_obj, subset = cell_id == 'D12_AAACGCTAGCGTCAAG-1')[[new_cols]]
+```
+
+```{r}
+subset(annotated_obj, subset = cell_id == 'D8_CGTAAGTCACTCCGGA-1')[[new_cols]]
+```
+
+Looks good!
+
+Take a quick look and see if these annotations plot similarly to the ones from 
+Aziumth
+
+```{r}
+DimPlot(annotated_obj, group.by = "cell_type_label",
+        label = TRUE, label.size = 3) + 
+  labs(title = 'Annotated cell types')
+```
+
+Overall looks pretty similar to azimuth, besides the top left cluster.
+
+Calculate some basic statistics on similarity of predictions.
+
+For reference, `cell_type_label` is from study metadata, and 
+`predicted.subclass` is from Azimuth.
+
+```{r}
+annotations_df <- annotated_obj[[c('cell_type_label', 'predicted.subclass')]]
+head(annotations_df)
+```
+
+```{r}
+# Simplify the values for comparison, 
+# e.g. "Astro_B" -> "Astro", "Endo-like" -> "Endo"
+annotations_df <- annotations_df %>%
+  mutate(label_simple = sub("_.*", "", cell_type_label)) %>%
+  mutate(label_simple = sub("-.*", "", label_simple)) %>%
+  mutate(pred_simple = sub("-.*", "", predicted.subclass)) %>%
+  mutate(correct = label_simple == pred_simple)
+sum(annotations_df$correct) / nrow(annotations_df)
+```
+
+92% agree, which is pretty good.
+
+```{r}
+head(annotations_df %>% filter(correct == FALSE))
+```
+
+```{r}
+mismatches <- annotations_df %>%
+  filter(correct == FALSE) %>%
+  # filter(label_simple != "Neuro") %>%
+  mutate(mismatch = paste0(label_simple, "-", pred_simple))
+table(mismatches$mismatch)
+```
+
+The `Neuro` labels appear to be a catch-all for less prominent cell types.
+
+Only 4 total Oligo-Astro & Astro-Oligo mistmaches. Majority of other mismatches
+appear to be from the Neuro type, and Endo-VLMC mismatches, although other 
+discrepancies are present.
+
+Add the `mismatch` column to the seurat metadata for use with DEG analysis next.
+Don't necessarily filter yet though, as some mismatches may be interesting to
+explore (Neuro types, Endo & VLMC, etc.)
+
+```{r}
+annotated_obj[['cell_types_match']] <- annotations_df$correct
+```
+
+```{r}
+FeaturePlot(annotated_obj, features = "cell_types_match") + 
+  labs(title = 'Cells with matching cell type labels from Azimuth and study')
+```
+
+## Differentially expressed genes by cell type labels
+
+
+
+
+
+
+
 
