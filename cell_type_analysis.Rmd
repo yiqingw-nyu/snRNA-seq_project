@@ -32,6 +32,7 @@ suppressPackageStartupMessages({
   library(Matrix)
   library(glue)
   library(viridis)
+  library(EnhancedVolcano)
 })
 ```
 
@@ -448,7 +449,7 @@ By disease state:
 
 ```{r}
 Idents(astros) <- "DISEASE"
-astro_markers <- FindAllMarkers(astros, min.pct = 0.0, test.use = "wilcox", 
+astro_markers <- FindAllMarkers(astros, min.pct = 0.01, test.use = "wilcox", 
                                 logfc.threshold = 0.0, min.cells.group = 10, 
                                 verbose = FALSE)
 
@@ -465,6 +466,60 @@ DoHeatmap(astros, features = top_genes$gene, label=FALSE) +
 
 ```{r}
 intersect(top_genes$gene, paper_astro_degs)
+```
+
+```{r, fig.height=8}
+EnhancedVolcano(
+  astro_markers,
+  lab = rownames(astro_markers),
+  x = 'avg_log2FC',
+  y = 'p_val_adj',
+  title = 'Astrocytes: AD vs NS',
+  legendLabels=c('Not sig.', 'log2 fold-change', 'adjusted p-value',
+      'adjusted p-value & log2 fold-change'),
+  FCcutoff = 1.5,
+  pCutoff = 10e-32)
+```
+
+Notable genes:
+- SAT1 is implicated in neurodegenerative disease
+
+APOE is commonly associated with AD, but does not show significant difference in
+AD & NS
+
+```{r}
+VlnPlot(astros, 
+        features = c("APOE"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "APOE expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+A gene we found to be differentially expressed which is not mentioned by study
+authors.
+
+```{r}
+VlnPlot(astros, 
+        features = c("ARL17B"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "ARL17B expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+HPSE2 is mentioned in the paper as being "important for removal of A-beta deposits":
+
+```{r}
+VlnPlot(astros, 
+        features = c("HPSE2"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "HPSE2 expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
 ```
 
 ### Oligodendrocytes
@@ -547,6 +602,58 @@ Find paper matches again:
 intersect(top_genes$gene, paper_oligo_degs)
 ```
 
+```{r}
+VlnPlot(oligos, 
+        features = c("PLP1"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "PLP1 expression in Oligodendrocytes") +
+  theme(axis.title.x = element_blank())
+```
+NEAT1 is discussed in the paper as "an enticing target for future investigation 
+as it is upregulated in several mouse models of AD", although the paper 
+discusses this gene in the context of both oligos and astros, whereas we only 
+see it in oligos.
+
+```{r}
+VlnPlot(oligos, 
+        features = c("NEAT1"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "NEAT1 expression in Oligodendrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+From paper: "Decreases in synaptic cell adhesion protein N-cadherin (CDH2) have 
+previously been reported in AD temporal cortex (Ando et al., 2011). Therefore, 
+upregulation of CDH2 in this subpopulation of AD oligodendrocytes is an 
+interesting discovery and may reflect a neuroprotective response to maintain 
+contacts between axons and oligodendrocyte lineage cells"
+
+```{r}
+VlnPlot(oligos, 
+        features = c("CDH2"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "CDH2 expression in Oligodendrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+```{r, fig.height=8}
+EnhancedVolcano(
+  oligo_markers,
+  lab = rownames(oligo_markers),
+  x = 'avg_log2FC',
+  y = 'p_val_adj',
+  title = 'Oligodendrocytes: AD vs NS',
+  legendLabels=c('Not sig.', 'log2 fold-change', 'adjusted p-value',
+      'adjusted p-value & log2 fold-change'),
+  FCcutoff = 1.5,
+  pCutoff = 10e-32)
+```
 
 ### OPCs
 
@@ -573,6 +680,17 @@ DoHeatmap(opcs, features = top_genes$gene, label=FALSE) +
   scale_fill_viridis()
 ```
 
+```{r, fig.height=8}
+EnhancedVolcano(
+  opc_markers,
+  lab = rownames(opc_markers),
+  x = 'avg_log2FC',
+  y = 'p_val_adj',
+  title = 'OPCs: AD vs NS',
+  FCcutoff = 1.5,
+  pCutoff = 0.05)
+```
+
 ### Other neuronal cells
 
 ```{r}
@@ -596,7 +714,15 @@ DoHeatmap(neuros, features = top_genes$gene, label=FALSE) +
   scale_fill_viridis()
 ```
 
-
+```{r}
+VlnPlot(neuros, 
+        features = c("XIST"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "XIST expression in other neuronal cells") +
+  theme(axis.title.x = element_blank())
+```
 
 
 
