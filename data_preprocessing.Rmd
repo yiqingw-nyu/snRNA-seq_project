@@ -250,6 +250,15 @@ DimPlot(seurat.obj, reduction = "umap",
         group.by = c("seurat_clusters", "orig.ident", "DISEASE"))
 ```
 
+```{r}
+#individual umaps (for slides) - easier to change titles this way
+DimPlot(seurat.obj, reduction = "umap", 
+        group.by = c("orig.ident")) + labs(title="Donor ID")
+
+DimPlot(seurat.obj, reduction = "umap", 
+        group.by = c("DISEASE")) + labs(title="Disease")
+```
+
 Visualize tSNE
 
 ```{r fig.align="center", echo = FALSE, fig.width = 18, fig.height=4}
@@ -266,6 +275,6 @@ saveRDS(seurat.obj, file = "/Users/biacordazzo/Desktop/NYU/2023_Fall/Methods/Fin
 ## Load object
 
 ```{r}
-
+seurat.obj <- readRDS(file = "/Users/biacordazzo/Desktop/NYU/2023_Fall/Methods/Final_Project/processed_data.rds")
 ```
 
