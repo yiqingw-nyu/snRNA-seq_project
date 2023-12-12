@@ -1,0 +1,187 @@
+---
+title: "Methods Final Project - Differential Expression"
+author: "Yiqing Wang"
+date: "2023-12-10"
+output: html_document
+---
+
+```{r}
+# load libraries
+
+library(Seurat)
+library(EnhancedVolcano)
+```
+
+```{r}
+# read in preprocessed data
+
+path <- "C:/NYU/classes/fall_2023/Methods/snRNA-seq_project"
+so <- readRDS(file = file.path(path, "data", "processed_data.rds"))
+```
+
+There are no "D1-1" samples in the cell annotation metadata file, but there are "D1_DMEM" and "D1_FACS" samples. I wanted to compare the barcodes of the D1-1 samples against the barcodes of the D1_DMEM and D1_FACS samples, so see if there is a significant overlap, so that we might be able to use D1_DMEM or D1_FACS cell barcodes in place of D1-1 barcodes.
+
+```{r}
+# data exploration
+
+metadata <- read.csv(file = file.path(path, "data", "sadick_2022_LEN_metadata_matrix.csv"), row.names = 1)
+
+d1_dmem <- metadata[metadata$sample == "D1_DMEM", ]
+d1_facs <- metadata[metadata$sample == "D1_FACS", ]
+
+d1_dmem_barcodes <- substr(x = d1_dmem$barcode, start = 1, stop = nchar(d1_dmem$barcode) - 2)
+d1_facs_barcodes <- substr(x = d1_facs$barcode, start = 1, stop = nchar(d1_facs$barcode) - 2)
+
+d1_1 <- so@meta.data[so@meta.data$orig.ident == "D1-1", ]
+length(unique(row.names(d1_1))) == nrow(d1_1) # testing if all D1-1 barcodes are unique
+
+d1_1_barcodes <- substr(row.names(d1_1), start = 6, stop = nchar(row.names(d1_1)) - 2)
+
+all(d1_1_barcodes %in% d1_dmem_barcodes)
+all(d1_1_barcodes %in% d1_facs_barcodes)
+
+grep(pattern = "FALSE", x = d1_1_barcodes %in% d1_dmem_barcodes)
+grep(pattern = "FALSE", x = d1_1_barcodes %in% d1_facs_barcodes)
+```
+
+It looks like all but 9 D1-1 barcodes are present in D1_DMEM barcodes. Therefore, I decided to rename the "D1_DMEM" cells to "D1-1", so that when we add the cell annotation metadata to the seurat object, the D1_DMEM barcodes can be used in place of D1-1 barcodes.
+
+Since the cell annotation metadata also does not have D5 cells, I wanted to see if the D5 barcodes from the Seurat object are present in the annotation metadata barcodes at all.
+
+```{r}
+meta_barcodes <- substr(metadata$barcode, start = 1, stop = nchar(metadata$barcode) - 2)
+d5 <- so@meta.data[so@meta.data$orig.ident == "D5", ]
+d5_barcodes <- substr(row.names(d5), start = 4, stop = nchar(row.names(d5)) - 2)
+
+d5_present <- sum(d5_barcodes %in% meta_barcodes)
+```
+
+It looks like almost none of the D5 barcodes are present in the cell annotation metadata. In a future filtering step, all the D5 cells will be removed from the Seurat object.
+
+Next, I will change cell annotation metadata format to prepare for adding to the Seurat object.
+
+```{r}
+# change metadata format to prepare for adding to the Seurat object
+
+# get rid of D1_FACS cells, as some of their barcodes overlap with D1_DMEM barcodes
+metadata <- metadata[!metadata$sample == "D1_FACS", ]
+
+# replace D1_DMEM in row names to D1-1, to preparing for using them as D1-1 barcodes
+row.names(metadata) <- gsub(pattern = "D1_DMEM", replacement = "D1-1", x = row.names(metadata))
+
+# the cell annotation metadata row names are in a different format as the Seurat object row names,
+# so I will rename the cells in the annotation metadata to match the format of the Seurat object row names.
+metadata$cell_name <- paste(sapply(strsplit(row.names(metadata), split = "\\."), FUN = function(x) x[2]),
+  sapply(strsplit(row.names(metadata), split = "\\."), FUN = function(x) x[1]), sep = "_")
+```
+
+Add metadata.
+
+```{r}
+so@meta.data$cell_id <- row.names(so@meta.data)
+
+# subset the Seurat object to remove the cells whose barcodes are not present in the cell annotation metadata
+so_sub <- subset(so, subset = cell_id %in% metadata$cell_name)
+
+# subset the metadata to remove cells whose barcodes are not present in the Seurat object
+metadata_sub <- metadata[metadata$cell_name %in% so_sub$cell_id, ]
+
+# add metadata
+new_so <- AddMetaData(so_sub, metadata = metadata_sub)
+```
+
+Next I will conduct DE analysis by subsetting the Seurat object by cell type and comparing Alzheimer's vs. non-symptomatic.
+
+```{r}
+# DE for astrocytes
+
+unique(new_so@meta.data$cell_type_label)
+so_astro <- subset(new_so, subset = cell_type_label == "Astro_A" | cell_type_label == "Astro_B")
+
+Idents(so_astro) <- "DISEASE"
+
+astro_markers <- FindAllMarkers(so_astro, only.pos = F, min.pct = 0.01, test.use = "wilcox",
+                                logfc.threshold = 0, min.cells.group = 10, return.thresh = 1, verbose = F)
+```
+
+```{r}
+# DE oligodendrocytes
+
+so_oligo <- subset(new_so, subset = cell_type_label == "Oligo")
+Idents(so_oligo) <- "DISEASE"
+oligo_markers <- FindAllMarkers(so_oligo, only.pos = F, min.pct = 0.01, test.use = "wilcox",
+                                logfc.threshold = 0, min.cells.group = 10, return.thresh = 1, verbose = F)
+```
+
+Next, volcano plots for the two comparisons.
+
+```{r}
+astro_markers_ad <- astro_markers[astro_markers$cluster == "Alzheimer's", ]
+astro_genes <- astro_markers_ad$gene[1:30] # choose top 30 p-value genes to label
+
+vol_astro <- EnhancedVolcano(
+  astro_markers_ad,
+  lab = astro_markers_ad$gene, # Label points with gene names
+  x = "avg_log2FC",
+  y = "p_val",
+  title = "Volcano Plot",
+  selectLab = astro_genes, # A subset of lab to label
+  pCutoff = 0.05,
+  FCcutoff = 1,
+  pointSize = 2,
+  labSize = 3,
+  labCol = "black"
+)
+
+png(filename = file.path(path, "plots", "astro_volc.png"), height = 2000, width = 2000, res = 300)
+print(vol_astro)
+dev.off()
+```
+
+```{r}
+oligo_markers_ad <- oligo_markers[oligo_markers$cluster == "Alzheimer's", ]
+oligo_genes <- oligo_markers_ad$gene[1:30] # choose top 30 p-value genes to label
+
+vol_oligo <- EnhancedVolcano(
+  oligo_markers_ad,
+  lab = oligo_markers_ad$gene, # Label points with gene names
+  x = "avg_log2FC",
+  y = "p_val",
+  title = "Volcano Plot",
+  selectLab = oligo_genes, # A subset of lab to label
+  pCutoff = 0.05,
+  FCcutoff = 1,
+  pointSize = 2,
+  labSize = 3,
+  labCol = "black"
+)
+
+png(filename = file.path(path, "plots", "oligo_volc.png"), height = 2000, width = 2000, res = 300)
+print(vol_oligo)
+dev.off()
+```
+
+Violin plots of interesting genes from Jacob's code.
+
+```{r}
+VlnPlot(so_astro, features = "ARL17B", group.by = "DISEASE", ncol = 1) +
+  NoLegend() +
+  labs(title = "HPSE2 expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+```{r}
+VlnPlot(so_astro, features = "HPSE2", group.by = "DISEASE", ncol = 1) +
+  NoLegend() +
+  labs(title = "HPSE2 expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+Here, we can see that HPSE2 from my analysis is down-regulated in Alzheimer's cells, which does not agree with Jacob's analysis or the paper. If I have time, I will investigate the reason of this discrepancy.
+
+```{r}
+VlnPlot(so_astro, features = "APOE", group.by = "DISEASE", ncol = 1) +
+  NoLegend() +
+  labs(title = "APOE expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
