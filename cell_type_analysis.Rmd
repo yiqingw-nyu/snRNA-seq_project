@@ -1,0 +1,728 @@
+---
+title: "Cell type analysis"
+author: "jstimes"
+date: "2023-12-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This analysis uses Seurat5 and some related packages. Run the following if not 
+already installed:
+
+```{r}
+# install.packages('Seurat')
+# remotes::install_github("satijalab/seurat-data", quiet = TRUE)
+# remotes::install_github("satijalab/azimuth", quiet = TRUE)
+# remotes::install_github("satijalab/seurat-wrappers", quiet = TRUE)
+```
+
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(Azimuth)
+  library(SeuratData)
+  library(ggsci)
+  library(presto)
+  library(patchwork)
+  library(Matrix)
+  library(glue)
+  library(viridis)
+  library(EnhancedVolcano)
+})
+```
+
+```{r}
+# NOTE: update with your personal path
+project_path <- '/Users/jacob/Documents/nyu/quant_methods/final_project/'
+```
+
+
+```{r}
+preprocessed_obj <- readRDS(glue("{project_path}processed_data.rds"))
+preprocessed_obj
+```
+
+```{r}
+preprocessed_obj <- FindNeighbors(preprocessed_obj, reduction = "integrated.cca", dims = 1:30)
+preprocessed_obj <- FindClusters(preprocessed_obj, resolution = 1)
+preprocessed_obj <- RunUMAP(preprocessed_obj, reduction = "integrated.cca", dims = 1:30)
+preprocessed_obj <- RunTSNE(preprocessed_obj, reduction = "integrated.cca", dims = 1:30)
+```
+
+```{r}
+DimPlot(preprocessed_obj, reduction = "tsne", 
+        group.by = c("orig.ident"))
+```
+
+```{r}
+DimPlot(preprocessed_obj, group.by = c("DISEASE"))
+```
+
+Azimuth R tutorial here:
+https://satijalab.github.io/azimuth/articles/run_azimuth_tutorial.html
+
+```{r}
+preprocessed_obj <- RunAzimuth(preprocessed_obj, reference = "humancortexref")
+preprocessed_obj <- NormalizeData(preprocessed_obj)
+```
+
+```{r}
+preprocessed_obj
+```
+
+```{r}
+DimPlot(preprocessed_obj, group.by = "predicted.subclass", reduction = "tsne", 
+        label = TRUE, label.size = 3)
+```
+
+```{r}
+DimPlot(preprocessed_obj, group.by = "predicted.subclass",
+        label = TRUE, label.size = 3) + 
+  labs(title = 'Predicted cell types')
+```
+
+```{r}
+# Some functions to plot cell type prediction scores and expression levels of
+# marker genes.
+
+Idents(preprocessed_obj) <- "predicted.subclass"
+
+has_gene <- function(gene) {
+  vfs <- VariableFeatures(preprocessed_obj)
+  return(length(vfs[grepl(gene, vfs)]) == 1)
+}
+
+plot_gene_markers_and_cell_pred_score <- function(gene_markers, cell_label, cell_name) {
+  num_genes = length(gene_markers)
+  prediction_score_plot <- FeaturePlot(
+    preprocessed_obj, features = glue("predictionscoresubclass_{cell_label}"))
+  prediction_score_plot <- 
+    prediction_score_plot + labs(title=glue("{cell_name} prediction score"))
+  # Use patchwork to combine all plots
+  # https://patchwork.data-imaginist.com/articles/guides/assembly.html#adding-plots-to-the-patchwork
+  all_plots_patch <- prediction_score_plot
+  for (gene in gene_markers) {
+    if (!has_gene(gene)) {
+      print(glue("No expression for marker gene {gene}"))
+      next
+    }
+    all_plots_patch <- all_plots_patch + 
+      (FeaturePlot(preprocessed_obj, features = gene) + NoLegend())
+  }
+  
+  # Use one gene expression legend on the last plot
+  # Looks cluttered if all plots have it
+  n <- length(all_plots_patch)
+  all_plots_patch[[n]] <- all_plots_patch[[n]] + RestoreLegend()
+  
+  # Apply same theme to all plots
+  all_plots_patch <- all_plots_patch +
+    plot_layout(ncol = 3) &
+    theme(title = element_text(size=8),
+          legend.text = element_text(size=8),
+          legend.title = element_text(size=4),
+          axis.line = element_line(linewidth=0.25),
+          axis.title = element_blank(),
+          axis.text = element_blank(),
+          axis.ticks = element_blank())
+  
+  all_plots_patch <- all_plots_patch + plot_annotation(
+    title = glue('{cell_name} prediction score & expression of gene markers'),
+    subtitle = 'Gene markers from Azimuth Human Motor Cortex cell type reference',
+    caption = 'Normalized expression levels from 0-5')
+  all_plots_patch
+}
+```
+
+```{r}
+# Gene markers from Azimuth
+# https://azimuth.hubmapconsortium.org/references/#Human%20-%20Motor%20Cortex
+astrocyte_gene_markers <- c(
+  "SLC1A2", "ADGRV1", "SLC1A3", "GPC5", "RNF219.AS1", "ARHGAP24", "CST3", 
+  "HPSE2", "AQP4", "COL5A3")
+plot_gene_markers_and_cell_pred_score(
+  astrocyte_gene_markers, "Astro", "Astrocyte")
+```
+
+```{r}
+oligodendrocyte_gene_markers <- c(
+  "PLP1", "ST18", "CTNNA3", "MBP", "MOBP", "RNF220", "NCKAP5", "ENPP2", "QKI", 
+  "SLC44A1")
+plot_gene_markers_and_cell_pred_score(
+  oligodendrocyte_gene_markers, "Oligo", "Oligodendrocyte")
+```
+
+```{r}
+# OPC = Oligodendrocyte Precursor Cell
+opc_gene_markers  <- c(
+  "VCAN", "PDGFRA", "OLIG1", "SMOC1", "COL9A1", "STK32A", "BCAS1", "FERMT1", 
+  "BCHE", "ZCCHC24")
+plot_gene_markers_and_cell_pred_score(
+  opc_gene_markers, "OPC", "OPC")
+```
+
+Mark cells with good cell type prediction scores.
+
+First, explore distributions of the scores:
+
+```{r}
+pred_score_threshold <- 0.9
+scores_df <- preprocessed_obj[['predicted.subclass.score']]
+ggplot(scores_df, aes(x=predicted.subclass.score)) +
+  labs(title = "Distribution of cell type prediction scores",
+       y = "Frequency") +
+  geom_histogram(binwidth=0.05, color="black", fill="skyblue") +
+  geom_vline(xintercept=pred_score_threshold, color="red", linetype="dashed") +
+    annotate("text", x=pred_score_threshold + 0.025, y = 15000, 
+             label=pred_score_threshold, size=3)
+```
+
+```{r}
+mapping_score_threshold <- 0.45
+mapping_scores_df <- preprocessed_obj[['mapping.score']]
+ggplot(mapping_scores_df, aes(x=mapping.score)) +
+  labs(title = "Distribution of cell type mapping scores",
+       y = "Frequency") +
+  geom_histogram(binwidth=0.05, color="black", fill="skyblue") +
+  geom_vline(xintercept=mapping_score_threshold, color="red", linetype="dashed") +
+    annotate("text", x=mapping_score_threshold + 0.025, y = 15000,
+             label=mapping_score_threshold, size=3)
+```
+Apply the thresholding:
+
+```{r}
+preprocessed_obj[['bad_cell_type']] <- 
+  preprocessed_obj[['mapping.score']] < mapping_score_threshold | 
+  preprocessed_obj[['predicted.subclass.score']] < pred_score_threshold
+
+
+total_cells <- ncol(preprocessed_obj)
+good_cell_types <- total_cells - sum(preprocessed_obj[['bad_cell_type']])
+print(glue("{good_cell_types} cells had a high-quality cell type prediction out of {total_cells} total"))
+```
+
+```{r}
+FeaturePlot(preprocessed_obj, features = "bad_cell_type") + 
+  labs(title = 'Filtered cells due to low annotation scores')
+```
+
+```{r}
+azimuth_obj <- subset(preprocessed_obj, subset = bad_cell_type == FALSE)
+# Double-check that worked as intended - should match count above
+ncol(azimuth_obj)
+```
+
+```{r}
+rm(preprocessed_obj)
+```
+
+
+## Compare with dataset's cell type annotations
+
+From here forward, we'll just use the subset'ed & annotated seurat object with
+the good cell type predictions.
+
+```{r}
+study_annotations <- read.csv(glue("{project_path}sadick_2022_LEN_metadata_matrix.csv"))
+head(study_annotations)
+```
+
+```{r}
+ggplot(study_annotations, aes(
+  # Sort by count:
+  x = reorder(cell_type_label, -table(cell_type_label)[cell_type_label]))) +
+  geom_bar(color="black", fill="skyblue") +
+  geom_text(stat='count', aes(label=after_stat(count)), vjust=-0.5) +
+  labs(title = "Distribution of cell type labels",
+       x = "Cell type label",
+       y = "Count") +
+  theme_minimal()
+```
+
+```{r}
+table(study_annotations$astrocyte_subtype)
+```
+
+```{r}
+table(study_annotations$oligodendrocyte_subtype)
+```
+
+```{r}
+rownames(study_annotations) <- study_annotations$X
+```
+
+```{r}
+# Grab just the info worth adding to seurat object and drop extra metadata
+# for samples we're excluding:
+
+before <- nrow(study_annotations)
+
+cell_ids_to_keep <- colnames(azimuth_obj)
+
+extra_metadata <- study_annotations %>%
+  # match the format used in the seurat object
+  mutate(meta_cell_id = paste0(sample, "_", barcode)) %>%
+  filter(meta_cell_id %in% cell_ids_to_keep) %>%
+  select(meta_cell_id, cell_type_label, astrocyte_subtype, oligodendrocyte_subtype)
+rownames(extra_metadata) <- extra_metadata$meta_cell_id
+after <- nrow(extra_metadata)
+print(glue("Filtered {before} rows to {after}"))
+```
+
+Redo plot from above for distribution of cell types in the filtered metadata:
+```{r}
+ggplot(extra_metadata, aes(
+  # Sort by count:
+  x = reorder(cell_type_label, -table(cell_type_label)[cell_type_label]))) +
+  geom_bar(color="black", fill="skyblue") +
+  geom_text(stat='count', aes(label=after_stat(count)), vjust=-0.5) +
+  labs(title = "Distribution of cell type labels",
+       x = "Cell type label",
+       y = "Count") +
+  theme_minimal()
+```
+
+
+```{r}
+# Not all the cells in our seurat object had metadata for some reason...
+# Filter to the ones that had metadata as `AddMetadata` requires same sizes.
+# First add cell IDs as a feature for easier subset'ing.
+azimuth_obj[['cell_id']] <- colnames(azimuth_obj)
+present_ids <- extra_metadata$meta_cell_id
+present_in_metadata <- subset(
+  azimuth_obj, subset = cell_id %in% present_ids)
+annotated_obj <- AddMetaData(present_in_metadata, extra_metadata)
+```
+
+Spot-check a couple rows to make sure these annotations were added properly
+
+```{r}
+tail(extra_metadata)
+```
+
+D12_AAACGCTAGCGTCAAG-1 should be (Astro_B, 6, NULL)
+D8_TGGAACTGTCTCTCCA-1 should be  (Neuro_B, NULL, NULL)
+
+```{r}
+new_cols <- c('cell_type_label', 'astrocyte_subtype', 'oligodendrocyte_subtype')
+subset(annotated_obj, subset = cell_id == 'D12_AAACGCTAGCGTCAAG-1')[[new_cols]]
+```
+
+```{r}
+subset(annotated_obj, subset = cell_id == 'D8_TGGAACTGTCTCTCCA-1')[[new_cols]]
+```
+
+Looks good!
+
+Take a quick look and see if these annotations plot similarly to the ones from 
+Aziumth
+
+```{r}
+DimPlot(annotated_obj, group.by = "cell_type_label",
+        label = TRUE, label.size = 3) + 
+  labs(title = 'Annotated cell types')
+```
+
+Overall looks pretty similar to azimuth, besides the top left cluster.
+
+Calculate some basic statistics on similarity of predictions.
+
+For reference, `cell_type_label` is from study metadata, and 
+`predicted.subclass` is from Azimuth.
+
+```{r}
+annotations_df <- annotated_obj[[c('cell_type_label', 'predicted.subclass')]]
+head(annotations_df)
+```
+
+```{r}
+# Simplify the values for comparison, 
+# e.g. "Astro_B" -> "Astro", "Endo-like" -> "Endo"
+annotations_df <- annotations_df %>%
+  mutate(label_simple = sub("_.*", "", cell_type_label)) %>%
+  mutate(label_simple = sub("-.*", "", label_simple)) %>%
+  mutate(pred_simple = sub("-.*", "", predicted.subclass)) %>%
+  mutate(correct = label_simple == pred_simple)
+sum(annotations_df$correct) / nrow(annotations_df)
+```
+
+95% agree, which is pretty good.
+
+```{r}
+head(annotations_df %>% filter(correct == FALSE))
+```
+
+```{r}
+mismatches <- annotations_df %>%
+  filter(correct == FALSE) %>%
+  # filter(label_simple != "Neuro") %>%
+  mutate(mismatch = paste0(label_simple, "-", pred_simple))
+table(mismatches$mismatch)
+```
+
+The `Neuro` labels appear to be a catch-all for less prominent cell types.
+
+Only 4 total Oligo-Astro & Astro-Oligo mistmaches. Majority of other mismatches
+appear to be from the Neuro type, and Endo-VLMC mismatches, although other 
+discrepancies are present.
+
+Add the `mismatch` column to the seurat metadata for use with DEG analysis next.
+Don't necessarily filter yet though, as some mismatches may be interesting to
+explore (Neuro types, Endo & VLMC, etc.)
+
+```{r}
+annotated_obj[['cell_types_match']] <- annotations_df$correct
+```
+
+```{r}
+FeaturePlot(annotated_obj, features = "cell_types_match") + 
+  labs(title = 'Cells with matching cell type labels from Azimuth and study')
+```
+
+```{r}
+rm(azimuth_obj)
+rm(study_annotations)
+rm()
+```
+
+## Differentially expressed genes by cell type labels
+
+Compare disease vs non-disease gene expression within same cell type.
+
+### Astrocytes
+
+By clusters:
+
+```{r}
+astros <- subset(annotated_obj, 
+       subset = cell_types_match == TRUE & predicted.subclass == 'Astro')
+all_genes <- rownames(astros)
+astros <- FindNeighbors(astros, reduction = "integrated.cca", dims = 1:30)
+astros <- FindClusters(astros, resolution = 1)
+astros <- RunUMAP(astros, reduction = "integrated.cca", dims = 1:30)
+astros <- ScaleData(astros, features = all_genes)
+astro_markers <- FindAllMarkers(astros, min.pct = 0.0, test.use = "wilcox", 
+                                logfc.threshold = 0.0, min.cells.group = 10, 
+                                verbose = FALSE)
+```
+
+```{r}
+DimPlot(astros, group.by = c("ident")) +
+  labs(title = "Clusters of Astros across both disease states")
+```
+
+```{r}
+astro_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 4) %>%
+    ungroup() -> top_genes
+
+DoHeatmap(astros, features = top_genes$gene, label=FALSE) +
+  labs(title="Top Differentially Expressed Gene in Astrocytes") +
+  scale_fill_viridis()
+```
+
+```{r}
+# Compare our results with genes mentioned in paper
+paper_astro_degs <- c(
+  # From paper section:
+  # "Transcriptionally distinct astrocyte subtypes are independent of disease state"
+  'EGFR', 'LRRC4C', 'EPHB1', 'DCLK1', 'NTNG1', 'EPHA4', 'AKAP12', 'NLGN4X',
+  'GRIA1', 'GRIK4', 'SHISA6', 'ADAMTSL3', 'L3MBTL4', 'FBN1', 'SORBS1', 'SPIRE1',
+  'SERPINA3', 'C3', 'OSMR', 'PSAP', 'COX1', 'ND1', 'ND3', 'APOE', 'CLU', 
+  'ITM2B', 'ITM2C',
+  # "Astrocytes have both common and cluster-specific transcriptomic changes in AD"
+  'HPSE2', 'SLC39A11', 'PFKP', 'NEAT1', 'RANBP3L', 'PLPP1', 'PLCG2',
+  # "Astrocytes have both putative gain and loss of function in AD"
+  'RGCC', 'PRDX1', 'DDIT4', 'ABCA1', 'PPARGC1', 'ACACB'
+  )
+intersect(top_genes$gene, paper_astro_degs)
+```
+
+By disease state:
+
+```{r}
+Idents(astros) <- "DISEASE"
+astro_markers <- FindAllMarkers(astros, min.pct = 0.01, test.use = "wilcox", 
+                                logfc.threshold = 0.0, min.cells.group = 10, 
+                                verbose = FALSE)
+
+astro_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 15) %>%
+    ungroup() -> top_genes
+
+DoHeatmap(astros, features = top_genes$gene, label=FALSE) +
+  labs(title="Top Differentially Expressed Gene in Astrocytes") +
+  scale_fill_viridis()
+```
+
+```{r}
+intersect(top_genes$gene, paper_astro_degs)
+```
+
+```{r, fig.height=8}
+EnhancedVolcano(
+  astro_markers,
+  lab = rownames(astro_markers),
+  x = 'avg_log2FC',
+  y = 'p_val_adj',
+  title = 'Astrocytes: AD vs NS',
+  legendLabels=c('Not sig.', 'log2 fold-change', 'adjusted p-value',
+      'adjusted p-value & log2 fold-change'),
+  FCcutoff = 1.5,
+  pCutoff = 10e-32)
+```
+
+Notable genes:
+- SAT1 is implicated in neurodegenerative disease
+
+APOE is commonly associated with AD, but does not show significant difference in
+AD & NS
+
+```{r}
+VlnPlot(astros, 
+        features = c("APOE"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "APOE expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+A gene we found to be differentially expressed which is not mentioned by study
+authors.
+
+```{r}
+VlnPlot(astros, 
+        features = c("ARL17B"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "ARL17B expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+HPSE2 is mentioned in the paper as being "important for removal of A-beta deposits":
+
+```{r}
+VlnPlot(astros, 
+        features = c("HPSE2"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "HPSE2 expression in Astrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+### Oligodendrocytes
+
+By clusters:
+
+```{r}
+oligos <- subset(annotated_obj,
+       subset = cell_types_match == TRUE & predicted.subclass == 'Oligo')
+all_genes <- rownames(oligos)
+oligos <- FindNeighbors(oligos, reduction = "integrated.cca", dims = 1:30)
+oligos <- FindClusters(oligos, resolution = 1)
+oligos <- RunUMAP(oligos, reduction = "integrated.cca", dims = 1:30)
+oligos <- ScaleData(oligos, features = all_genes)
+oligo_markers <- FindAllMarkers(oligos, min.pct = 0.0, test.use = "wilcox", 
+                                logfc.threshold = 0.0, min.cells.group = 10, 
+                                verbose = FALSE)
+```
+
+```{r}
+DimPlot(oligos, group.by = c("ident")) +
+  labs(title = "Clusters of Oligos across both disease states")
+```
+
+
+```{r}
+oligo_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 5) %>%
+    ungroup() -> top_genes
+
+DoHeatmap(oligos, features = top_genes$gene, label=FALSE) +
+  labs(title="Top Differentially Expressed Gene in Oligodendrocytes") +
+  scale_fill_viridis()
+```
+
+```{r}
+# Compare our results with genes mentioned in paper
+paper_oligo_degs <- c(
+  # Top transcripts per oligo cluster (Fig 2B):
+  'LURAP1L-AS1', 'SLCA11', 'ANKRD18A', 'HIP1', 'FP236383.3', 'FTH1', 'PLP1', 
+  'CRYAB', 'DBNDD2', 'SELENOP', 'RBFOX1', 'FASGRF1', 'ACSBG1', 'AFF3', 
+  'COL18A1', 'NRG3', 'ADGRV1', 'GPM6A', 'SLC1A2', 'DPP10', 'ZC3HAV1', 'IFIT2',
+  'BIRC3', 'CAMK2D',
+  
+  # Others mentioned in paper body, 
+  # "Putative loss of critical oligodendrocyte functions in AD":
+  'CNP', 'CD9', 'NEAT1', 'SEPTIN4', 'SERINC3', 'MSMO1', 'FDFT1', 'LSS',
+  'PSMB1', 'B2M', 'HLA-A',
+  
+  # Mentioned in GO section
+  # 'We next classified our findings by assigning “GO descriptions”...'
+  'LRP4', 'TIAM1', 'CDH2', 'FMO5', 'SCD', 'CDH1', 'DISC1', 'PDE8A', 'PDE10A', 
+  'PDE1A', 'RORA'
+  )
+intersect(top_genes$gene, paper_oligo_degs)
+```
+
+By disease state:
+
+```{r}
+Idents(oligos) <- "DISEASE"
+oligo_markers <- FindAllMarkers(oligos, min.pct = 0.0, test.use = "wilcox", 
+                                logfc.threshold = 0.0, min.cells.group = 10, 
+                                verbose = FALSE)
+oligo_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 0.5) %>%
+    slice_head(n = 15) %>%
+    ungroup() -> top_genes
+
+DoHeatmap(oligos, features = top_genes$gene, label=FALSE) +
+  labs(title="Top Differentially Expressed Gene in Oligodendrocytes") +
+  scale_fill_viridis()
+```
+
+Find paper matches again:
+```{r}
+intersect(top_genes$gene, paper_oligo_degs)
+```
+
+```{r}
+VlnPlot(oligos, 
+        features = c("PLP1"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "PLP1 expression in Oligodendrocytes") +
+  theme(axis.title.x = element_blank())
+```
+NEAT1 is discussed in the paper as "an enticing target for future investigation 
+as it is upregulated in several mouse models of AD", although the paper 
+discusses this gene in the context of both oligos and astros, whereas we only 
+see it in oligos.
+
+```{r}
+VlnPlot(oligos, 
+        features = c("NEAT1"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "NEAT1 expression in Oligodendrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+From paper: "Decreases in synaptic cell adhesion protein N-cadherin (CDH2) have 
+previously been reported in AD temporal cortex (Ando et al., 2011). Therefore, 
+upregulation of CDH2 in this subpopulation of AD oligodendrocytes is an 
+interesting discovery and may reflect a neuroprotective response to maintain 
+contacts between axons and oligodendrocyte lineage cells"
+
+```{r}
+VlnPlot(oligos, 
+        features = c("CDH2"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "CDH2 expression in Oligodendrocytes") +
+  theme(axis.title.x = element_blank())
+```
+
+```{r, fig.height=8}
+EnhancedVolcano(
+  oligo_markers,
+  lab = rownames(oligo_markers),
+  x = 'avg_log2FC',
+  y = 'p_val_adj',
+  title = 'Oligodendrocytes: AD vs NS',
+  legendLabels=c('Not sig.', 'log2 fold-change', 'adjusted p-value',
+      'adjusted p-value & log2 fold-change'),
+  FCcutoff = 1.5,
+  pCutoff = 10e-32)
+```
+
+### OPCs
+
+```{r}
+opcs <- subset(annotated_obj,
+       subset = cell_types_match == TRUE & predicted.subclass == 'OPC')
+all_genes <- rownames(opcs)
+opcs <- ScaleData(opcs, features = all_genes)
+Idents(opcs) <- "DISEASE"
+opc_markers <- FindAllMarkers(opcs, min.pct = 0.0, test.use = "wilcox", 
+                                logfc.threshold = 0.0, min.cells.group = 10, 
+                                verbose = FALSE)
+```
+
+```{r}
+opc_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 15) %>%
+    ungroup() -> top_genes
+
+DoHeatmap(opcs, features = top_genes$gene, label=FALSE) +
+  labs(title="Top Differentially Expressed Gene in OPCs") +
+  scale_fill_viridis()
+```
+
+```{r, fig.height=8}
+EnhancedVolcano(
+  opc_markers,
+  lab = rownames(opc_markers),
+  x = 'avg_log2FC',
+  y = 'p_val_adj',
+  title = 'OPCs: AD vs NS',
+  FCcutoff = 1.5,
+  pCutoff = 0.05)
+```
+
+### Other neuronal cells
+
+```{r}
+neuros <- subset(annotated_obj,
+       subset = cell_type_label == 'Neuro_A' | cell_type_label == 'Neuro_B')
+all_genes <- rownames(neuros)
+neuros <- ScaleData(neuros, features = all_genes)
+Idents(neuros) <- "DISEASE"
+neuro_markers <- FindAllMarkers(neuros, min.pct = 0.0, test.use = "wilcox", 
+                                logfc.threshold = 0.0, min.cells.group = 10, 
+                                verbose = FALSE)
+
+neuro_markers %>%
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 15) %>%
+    ungroup() -> top_genes
+
+DoHeatmap(neuros, features = top_genes$gene, label=FALSE) +
+  labs(title="Top Differentially Expressed Gene in other neuronal cells") +
+  scale_fill_viridis()
+```
+
+```{r}
+VlnPlot(neuros, 
+        features = c("XIST"),
+        group.by = "DISEASE", 
+        ncol = 1) +
+  NoLegend() +
+  labs(title = "XIST expression in other neuronal cells") +
+  theme(axis.title.x = element_blank())
+```
+
+
+

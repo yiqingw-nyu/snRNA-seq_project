@@ -1,0 +1,271 @@
+---
+title: "Methods Final Project"
+author: "Bianca Cordazzo"
+date: "2023-12-03"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(Seurat)
+  library(ggsci)
+  library(presto)
+  library(Matrix)
+})
+```
+
+## Create Seurat Object
+
+Data was downloaded from: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE167494
+
+```{r}
+#list all sample files
+data.path <- '/Users/biacordazzo/Desktop/NYU/2023_Fall/Methods/Final_Project/GSE167494_RAW/'
+sample_names <- list.files(data.path)
+
+#group matrices, features, barcodes in dif lists
+sample_mats <- c()
+sample_feats <- c()
+sample_bars <- c()
+
+for (i in 1:length(sample_names)) {
+  if (grepl('matrix.mtx', sample_names[i], fixed = TRUE)) {
+    sample_mats <- append(sample_mats, sample_names[i])
+  } else if (grepl('features.tsv', sample_names[i], fixed = TRUE)) {
+    sample_feats <- append(sample_feats, sample_names[i])
+  } else {
+    sample_bars <- append(sample_bars, sample_names[i])
+  }
+}
+
+##sanity check
+sample_mats[1:3]
+sample_feats[1:3]
+sample_bars[1:3]
+#lengths should be equal
+print(paste(length(sample_mats),length(sample_feats),length(sample_bars)))
+```
+
+See https://kb.10xgenomics.com/hc/en-us/articles/115000794686-How-is-the-MEX-format-used-for-the-gene-barcode-matrices- for information on the formats of the 10x output (matrix, barcodes, features)
+
+For the matrix file, we need to skip the first 3 lines as they are headers
+
+```{r}
+#features (genes)
+feature <- read_tsv(paste0(data.path, sample_feats[1]), show_col_types = FALSE, col_names = FALSE)
+#head(feature)   
+#keep only the column with gene names
+feature <- feature["X2"]
+colnames(feature) <- c("Genes")
+#head(feature)
+
+#barcodes 
+barcodes <- read_tsv(paste0(data.path, sample_bars[1]), show_col_types = FALSE, col_names = FALSE)
+#head(barcodes)
+
+#we can actually read the the matrix file directly while incorporating both features + barcodes
+#reference: https://satijalab.org/seurat/reference/readmtx
+matrix <- ReadMtx(mtx = paste0(data.path, sample_mats[1]), 
+                  features = paste0(data.path, sample_feats[1]),
+                  cells = paste0(data.path, sample_bars[1]))
+#matrix[1:10,1:3]
+
+##add donor info to barcodes
+donor_ID <- strsplit(sample_mats[1], "_")[[1]][2] #get ID from file name
+#print(donor_ID)
+colnames(matrix) <- paste0(donor_ID, "_", colnames(matrix))
+matrix[1:10,1:3] #sanity check
+```
+
+
+
+```{r}
+#create seurat object for first sample
+sample1 <- CreateSeuratObject(counts = matrix, min.cells = 1, min.features = 1)
+sample1
+head(sample1, 3)
+```
+
+```{r}
+#create function to repeat all of the above for the rest of the samples
+create_seurat <- function(path, sample_matrix, sample_features, sample_barcodes) {
+  
+  matrix <- ReadMtx(mtx = paste0(path, sample_matrix), 
+                    features = paste0(path, sample_features),
+                    cells = paste0(path, sample_barcodes))
+
+  ##add donor info to barcodes
+  donor_ID <- strsplit(sample_matrix, "_")[[1]][2] #get ID from file name
+  colnames(matrix) <- paste0(donor_ID, "_", colnames(matrix))
+
+  #create seurat obj
+  object <- CreateSeuratObject(counts = matrix, min.cells = 1, min.features = 1)
+  return(object)
+}
+```
+
+```{r}
+#make sure function works
+#sample1_test <- create_seurat(path=data.path, sample_mats[1], sample_feats[1], sample_bars[1])
+#sample1_test
+#sample1
+```
+
+```{r warning=FALSE}
+#create objects for the rest of the samples and merge
+seurats <- c()
+
+for (i in 2:length(sample_mats)) {
+  print(paste0('Sample: ', sample_mats[i]))
+  sample_i <- create_seurat(path=data.path, 
+                            sample_matrix=sample_mats[i], 
+                            sample_features=sample_feats[i], 
+                            sample_barcodes=sample_bars[i])
+  seurats <- append(seurats, sample_i)
+  rm(sample_i)
+}
+
+seurat.obj <- merge(sample1, y = seurats, merge.data = TRUE)
+seurat.obj <- JoinLayers(seurat.obj)
+```
+
+```{r}
+head(seurat.obj)
+```
+
+
+```{r}
+#remove redundant files
+rm(barcodes, feature, matrix, sample1)
+```
+
+```{r}
+#load metadata 
+metadata <- read_csv(paste0('/Users/biacordazzo/Desktop/NYU/2023_Fall/Methods/Final_Project/metatada.csv'), show_col_types=FALSE)
+metadata
+```
+
+```{r}
+#map metadata to the object
+merged.meta <- left_join(seurat.obj@meta.data, metadata, by = c("orig.ident"="DONOR_NUMBER"))
+rownames(merged.meta) <- rownames(seurat.obj@meta.data)
+# head(merged.meta)
+# tail(merged.meta)
+# print(unique(merged.meta$orig.ident))
+
+seurat.obj@meta.data <- merged.meta
+head(seurat.obj@meta.data)
+```
+
+## QC
+
+Reference: https://satijalab.org/seurat/articles/pbmc3k_tutorial.html
+
+```{r}
+seurat.obj[["percent.mt"]] <- PercentageFeatureSet(seurat.obj, pattern = "^MT-")
+```
+
+```{r fig.align="center", echo = FALSE, fig.width = 18, fig.height=4}
+VlnPlot(seurat.obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+```{r}
+plot1 <- FeatureScatter(seurat.obj, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(seurat.obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+Remove low-quality nuclei + outliers
+
+In theory, since only nuclei were sequenced, we should expect low to no mitochondrial gene counts, since these come from the cytoplasm. Therefore, I am setting a harsh threshold for percent.mt, hopefully to remove most sources of contamination.
+
+```{r fig.align="center", echo = FALSE, fig.width = 18, fig.height=4}
+seurat.obj <- subset(seurat.obj, subset = nFeature_RNA > 200 & nFeature_RNA < 3000 & percent.mt < 1)
+seurat.obj
+
+#visualize QC metrics after filtering
+VlnPlot(seurat.obj, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+```
+
+## Data normalization
+
+Reference: Seurat integration vignette: https://satijalab.org/seurat/articles/integration_introduction.html
+
+Try to reproduce what the paper did:
+1. "Data were log normalized, and the top 2,000 variable features were identified on a per sample basis."
+
+```{r}
+seurat.obj[["RNA"]] <- split(seurat.obj[["RNA"]], f = seurat.obj$orig.ident)
+
+seurat.obj <- NormalizeData(seurat.obj, normalization.method = "LogNormalize", 
+                            scale.factor = 10000, verbose = FALSE)
+seurat.obj <- FindVariableFeatures(seurat.obj, selection.method = "vst", 
+                                   nfeatures = 2000, verbose = FALSE)
+seurat.obj <- ScaleData(seurat.obj)
+seurat.obj <- RunPCA(seurat.obj)
+```
+
+2. "Samples were then anchored and integrated using Canonical Correlation Analysis (dims = 30)."
+
+```{r}
+seurat.obj <- IntegrateLayers(object = seurat.obj, method = CCAIntegration, 
+                              orig.reduction = "pca", new.reduction = "integrated.cca", 
+                              verbose = FALSE)
+
+# re-join layers after integration
+seurat.obj[["RNA"]] <- JoinLayers(seurat.obj[["RNA"]])
+seurat.obj
+```
+
+"After scaling the data, linear and non-linear dimension reduction was performed by Principle Component Analysis of variable features and t-Distributed Stochastic Neighbor Embedding (tSNE) analysis, respectively, using the top 30 principle components."
+
+```{r}
+#double-check elbow plot
+ElbowPlot(seurat.obj)
+```
+
+Here, I decided to run UMAP as well
+
+```{r}
+seurat.obj <- FindNeighbors(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+seurat.obj <- FindClusters(seurat.obj, resolution = 1)
+seurat.obj <- RunUMAP(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+seurat.obj <- RunTSNE(seurat.obj, reduction = "integrated.cca", dims = 1:30)
+```
+
+```{r}
+#check if layers were added
+seurat.obj
+```
+
+Visualize UMAP
+
+```{r fig.align="center", echo = FALSE, fig.width = 18, fig.height=4}
+DimPlot(seurat.obj, reduction = "umap", 
+        group.by = c("seurat_clusters", "orig.ident", "DISEASE"))
+```
+
+Visualize tSNE
+
+```{r fig.align="center", echo = FALSE, fig.width = 18, fig.height=4}
+DimPlot(seurat.obj, reduction = "tsne", 
+        group.by = c("seurat_clusters", "orig.ident", "DISEASE"))
+```
+
+## Save pre-processed object
+
+```{r}
+saveRDS(seurat.obj, file = "/Users/biacordazzo/Desktop/NYU/2023_Fall/Methods/Final_Project/processed_data.rds")
+```
+
+## Load object
+
+```{r}
+
+```
+
