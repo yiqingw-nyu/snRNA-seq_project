@@ -12,9 +12,10 @@
 
 **File inventory:**
 
-- **data:** Contains information on the data used for this project, including a relevant *metadata.csv* file.
+- **data:** contains information on the data used for this project, including a relevant *metadata.csv* file.
 - **data_preprocessing.Rmd:** script used for data preprocessing, including normalization, PCA, and data integration.
 - **cell_type_analysis.Rmd:** script used for cell type annotation and differential gene expression analysis.
+- **differential_expression.Rmd:** script used for additional differential gene expression analysis and volcano plots.
 
 **Reference:**
 
