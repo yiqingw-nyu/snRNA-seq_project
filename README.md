@@ -16,6 +16,7 @@
 - **data_preprocessing.Rmd:** script used for data preprocessing, including normalization, PCA, and data integration.
 - **cell_type_analysis.Rmd:** script used for cell type annotation and differential gene expression analysis.
 - **differential_expression.Rmd:** script used for additional differential gene expression analysis and volcano plots.
+- **VascularvsAlz.r:** script for comparing vascular vs. alzheimer's dementia.
 
 **Reference:**
 
